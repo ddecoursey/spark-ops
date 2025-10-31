@@ -20,6 +20,10 @@ echo ========================================
 docker-compose ps
 
 echo.
+echo Setting up Kibana dashboard...
+call :import_dashboard
+
+echo.
 echo Starting Spark Application...
 docker exec -d spark-master /opt/spark/bin/spark-submit --master spark://spark-master:7077 --conf spark.driver.host=spark-master /opt/spark-apps/anomaly_detection_app.py continuous 10
 
@@ -59,3 +63,50 @@ echo   stop.bat
 echo.
 
 pause
+goto :eof
+
+:import_dashboard
+setlocal enabledelayedexpansion
+echo Checking if Kibana dashboard exists...
+for /f "tokens=*" %%i in ('powershell -Command "try { (Invoke-WebRequest -Uri 'http://localhost:5601/api/saved_objects/_find?type=dashboard&search=Spark' -Headers @{'kbn-xsrf'='true'} -UseBasicParsing -TimeoutSec 10).Content | ConvertFrom-Json | Select-Object -ExpandProperty total } catch { 0 }"') do set dashboard_count=%%i
+
+if "!dashboard_count!"=="1" (
+    echo [PASS] Kibana dashboard already exists
+    goto :eof
+)
+
+echo Waiting for Kibana to be ready...
+set kibana_ready=0
+for /L %%i in (1,1,12) do (
+    powershell -Command "try { Invoke-WebRequest -Uri 'http://localhost:5601/api/status' -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop | Out-Null; exit 0 } catch { exit 1 }" >nul 2>&1
+    if !errorlevel! equ 0 (
+        set kibana_ready=1
+        goto :kibana_ready
+    )
+    if %%i lss 12 (
+        echo   Attempt %%i/12 - waiting 10 seconds...
+        timeout /t 10 /nobreak >nul
+    )
+)
+
+:kibana_ready
+if !kibana_ready! equ 0 (
+    echo [WARN] Kibana not ready after 2 minutes - skipping dashboard import
+    goto :eof
+)
+
+echo Importing Kibana dashboard...
+curl.exe -X POST "http://localhost:5601/api/saved_objects/_import" -H "kbn-xsrf: true" -F "file=@kibana\dashboards\spark-dashboard-v9.ndjson" >nul 2>&1
+if !errorlevel! equ 0 (
+    echo [PASS] Dashboard imported successfully
+) else (
+    echo [WARN] Dashboard import may have failed - checking if dashboard exists...
+    for /f "tokens=*" %%j in ('powershell -Command "try { (Invoke-WebRequest -Uri 'http://localhost:5601/api/saved_objects/_find?type=dashboard&search=Spark' -Headers @{'kbn-xsrf'='true'} -UseBasicParsing -TimeoutSec 5).Content | ConvertFrom-Json | Select-Object -ExpandProperty total } catch { 0 }"') do set final_dashboard_count=%%j
+    if "!final_dashboard_count!"=="1" (
+        echo [PASS] Dashboard exists - import was successful
+    ) else (
+        echo [WARN] Dashboard import failed - dashboard not found
+    )
+)
+
+goto :eof
