@@ -1,0 +1,172 @@
+# OpenTelemetry Collector - Gateway Mode Configuration  
+# This collector handles ETL, advanced processing, batching, and final export
+
+receivers:
+  # Receive data from agent collectors via OTLP
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Memory limiter with higher capacity for gateway
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 1024
+    spike_limit_mib: 256
+  
+  # Enhanced resource processor with environment tagging
+  resource:
+    attributes:
+      - key: collector.mode
+        value: "gateway"
+        action: insert
+      - key: deployment.environment
+        value: "local"
+        action: insert
+      - key: deployment.tier
+        value: "gateway"
+        action: insert
+      - key: processing.timestamp
+        value: "TIMESTAMP"
+        action: insert
+  
+  # Advanced batching for optimal throughput
+  batch:
+    timeout: 15s
+    send_batch_size: 2048
+    send_batch_max_size: 4096
+  
+  # Metrics transformation for anomaly detection and enrichment
+  metricstransform:
+    transforms:
+      - include: .*
+        match_type: regexp
+        action: update
+        operations:
+          - action: add_label
+            new_label: anomaly_detection_enabled
+            new_value: "true"
+          - action: add_label
+            new_label: processed_by_gateway
+            new_value: "true"
+          - action: add_label
+            new_label: gateway_processing_time
+            new_value: "TIMESTAMP"
+  
+  # Resource detection processor
+  resourcedetection:
+    detectors: [env, system]
+    timeout: 5s
+    override: false
+  
+  # Attributes processor for data enrichment
+  attributes:
+    actions:
+      - key: gateway.version
+        value: "v1.0.0"
+        action: insert
+      - key: data_pipeline.stage
+        value: "gateway"
+        action: insert
+
+  # ETL: Filter processor to drop debug level logs
+  filter/drop_debug_logs:
+    error_mode: ignore
+    logs:
+      log_record:
+        # Drop logs where message contains DEBUG (case insensitive)
+        - 'IsMatch(body, "(?i).*DEBUG.*")'
+
+  # ETL: Transform processor to truncate long messages/bodies
+  transform:
+    error_mode: ignore
+    log_statements:
+      - context: log
+        statements:
+          # Check and truncate log body if longer than 500 characters (for testing)
+          - set(attributes["original_body_length"], Len(body)) where Len(body) > 500
+          - set(attributes["truncated"], true) where Len(body) > 500
+          - set(body, Substring(body, 0, 500)) where Len(body) > 500
+          # Check and truncate message attribute if present  
+          - set(attributes["original_message_length"], Len(attributes["message"])) where attributes["message"] != nil and Len(attributes["message"]) > 500
+          - set(attributes["message_truncated"], true) where attributes["message"] != nil and Len(attributes["message"]) > 500
+          - set(attributes["message"], Substring(attributes["message"], 0, 500)) where attributes["message"] != nil and Len(attributes["message"]) > 500
+    trace_statements:
+      - context: span
+        statements:
+          # Truncate span names if too long
+          - set(name, Substring(name, 0, 10000)) where Len(name) > 10000
+          - set(attributes["name_truncated"], true) where Len(name) > 10000
+    metric_statements:
+      - context: metric
+        statements:
+          # Truncate metric names and descriptions
+          - set(name, Substring(name, 0, 1000)) where Len(name) > 1000
+          - set(description, Substring(description, 0, 10000)) where description != nil and Len(description) > 10000
+
+exporters:
+  # Export to Elasticsearch using data streams with enhanced configuration
+  elasticsearch:
+    endpoints: ["http://elasticsearch:9200"]
+    logs_dynamic_index:
+      enabled: true
+    traces_dynamic_index:
+      enabled: true  
+    metrics_dynamic_index:
+      enabled: true
+    mapping:
+      mode: ecs
+  
+  # Enhanced debug exporter for gateway monitoring
+  debug:
+    verbosity: detailed
+    sampling_initial: 10
+    sampling_thereafter: 500
+  
+
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+    path: "/health"
+  
+  pprof:
+    endpoint: 0.0.0.0:1777
+  
+  zpages:
+    endpoint: 0.0.0.0:55679
+  
+  # Basic auth extension (can be enabled for security)
+  # basicauth/server:
+  #   htpasswd:
+  #     inline: |
+  #       otelcol:$2y$10$...
+
+service:
+  extensions: [health_check, pprof, zpages]
+  
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection, resource, attributes, metricstransform, transform, batch]
+      exporters: [elasticsearch, debug]
+    
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, filter/drop_debug_logs, resourcedetection, resource, attributes, transform, batch]
+      exporters: [elasticsearch, debug]
+    
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection, resource, attributes, transform, batch]
+      exporters: [elasticsearch, debug]
+  
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      level: detailed
+      address: 0.0.0.0:8888

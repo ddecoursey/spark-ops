@@ -42,6 +42,8 @@ echo   Spark Master UI:     http://localhost:8080
 echo   Spark Worker UI:     http://localhost:8081
 echo   Spark App UI:        http://localhost:4040
 echo   Elasticsearch API:   http://localhost:9200
+echo   OTel Agent Health:   http://localhost:13133
+echo   OTel Gateway Health: http://localhost:13134
 echo.
 echo Dashboard:
 echo   1. Open Kibana:      http://localhost:5601
@@ -54,8 +56,15 @@ echo   Name:     AnomalyDetectionApp
 echo   Duration: 10 minutes (continuous mode)
 echo   Status:   Check at http://localhost:8080
 echo.
+echo OpenTelemetry Architecture:
+echo   Agent Mode:     Collects from Spark + FileLogs ^(port 13133^)
+echo   Gateway Mode:   ETL/Batching layer ^(port 13134^)
+echo   Log Generator:  Continuous log creation for ETL testing
+echo   Data Flow:      Spark + Logs ^> Agent ^> Gateway ^> Elasticsearch
+echo.
 echo To view logs:
-echo   docker logs otel-collector
+echo   docker logs otel-collector-agent
+echo   docker logs otel-collector-gateway
 echo   docker logs spark-master
 echo.
 echo To stop:

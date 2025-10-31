@@ -1,0 +1,136 @@
+# OpenTelemetry Collector - Agent Mode Configuration
+# This collector focuses on data collection and sends to the gateway
+
+receivers:
+  # Receive metrics via OTLP protocol (gRPC and HTTP)
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+  
+  # Apache Spark receiver to collect metrics from Spark cluster
+  apachespark:
+    endpoint: "http://spark-master:4040"
+    collection_interval: 30s
+    application_names:
+      - "AnomalyDetectionApp"
+
+  # File log receiver to read from log files and generate log events
+  filelog:
+    include: ["/var/log/otel/*.log"]
+    exclude: ["/var/log/otel/*.tmp"]
+    start_at: beginning
+    include_file_path: true
+    include_file_name: true
+    poll_interval: 2s
+    max_log_size: 1048576  # 1MB max log size to handle long messages
+    operators:
+      # Parse timestamp and log level from the log format
+      - type: regex_parser
+        regex: '^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[.\d]*Z?)\s+(?P<log_level>\w+)\s+\[(?P<component>[^\]]+)\]\s+(?P<message>.*)'
+        timestamp:
+          parse_from: attributes.timestamp
+          layout: '%Y-%m-%dT%H:%M:%S.%LZ'
+        severity:
+          parse_from: attributes.log_level
+          mapping:
+            DEBUG: debug
+            INFO: info  
+            WARN: warn
+            ERROR: error
+            debug: debug
+            info: info
+            warn: warn
+            error: error
+      # Ensure log_level is also available as separate attribute
+      - type: move
+        from: attributes.log_level
+        to: attributes.level
+      # Add additional attributes
+      - type: add
+        field: attributes.service.name
+        value: "spark-platform"
+      - type: add
+        field: attributes.log.source
+        value: "filelog"
+
+processors:
+  # Memory limiter to prevent OOM
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+    spike_limit_mib: 64
+  
+  # Basic resource processor for agent identification
+  resource:
+    attributes:
+      - key: collector.mode
+        value: "agent"
+        action: insert
+      - key: collector.instance
+        value: "agent-001"
+        action: insert
+      - key: service.namespace
+        value: "aiops"
+        action: insert
+  
+  # Light batching for network efficiency
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+
+exporters:
+  # Export to Gateway Collector via OTLP
+  otlp/gateway:
+    endpoint: http://otel-collector-gateway:4317
+    tls:
+      insecure: true
+    sending_queue:
+      num_consumers: 4
+      queue_size: 100
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+  
+  # Debug exporter for troubleshooting (reduced verbosity)
+  debug:
+    verbosity: basic
+    sampling_initial: 2
+    sampling_thereafter: 200
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+  
+  pprof:
+    endpoint: 0.0.0.0:1777
+
+service:
+  extensions: [health_check, pprof]
+  
+  pipelines:
+    metrics:
+      receivers: [otlp, apachespark]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlp/gateway, debug]
+    
+    logs:
+      receivers: [otlp, filelog]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlp/gateway]
+    
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlp/gateway]
+  
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      level: detailed
+      address: 0.0.0.0:8888

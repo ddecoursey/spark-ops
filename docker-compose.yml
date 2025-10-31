@@ -86,20 +86,70 @@ services:
       timeout: 10s
       retries: 5
 
-  # OpenTelemetry Collector
-  otel-collector:
+  # OpenTelemetry Collector - Agent Mode (Data Collection)
+  otel-collector-agent:
     image: otel/opentelemetry-collector-contrib:0.115.1
-    container_name: otel-collector
-    command: ["--config=/etc/otel-collector-config.yaml"]
+    container_name: otel-collector-agent
+    command: ["--config=/etc/otel-collector-agent-config.yaml"]
     volumes:
-      - ./otel/otel-collector-config.yaml:/etc/otel-collector-config.yaml
+      - ./otel/otel-collector-agent-config.yaml:/etc/otel-collector-agent-config.yaml
+      - ./otel/logs:/var/log/otel
     ports:
-      - "4317:4317"   # OTLP gRPC receiver
-      - "4318:4318"   # OTLP HTTP receiver
+      - "4317:4317"   # OTLP gRPC receiver (keep original for external apps)
+      - "4318:4318"   # OTLP HTTP receiver (keep original for external apps)
       - "13133:13133" # health_check extension
+      - "8888:8888"   # metrics endpoint
+    depends_on:
+      - spark-master
+    networks:
+      - aiops-network
+
+  # OpenTelemetry Collector - Gateway Mode (ETL & Batching)
+  otel-collector-gateway:
+    image: otel/opentelemetry-collector-contrib:0.115.1
+    container_name: otel-collector-gateway
+    command: ["--config=/etc/otel-collector-gateway-config.yaml"]
+    volumes:
+      - ./otel/otel-collector-gateway-config.yaml:/etc/otel-collector-gateway-config.yaml
+    ports:
+      - "4319:4317"   # OTLP gRPC receiver (different external port)
+      - "4320:4318"   # OTLP HTTP receiver (different external port)
+      - "13134:13133" # health_check extension (different external port)
+      - "8889:8888"   # metrics endpoint (different external port)
     depends_on:
       elasticsearch:
         condition: service_healthy
+    networks:
+      - aiops-network
+
+  # Log Generator Service - Simulates continuous log generation
+  log-generator:
+    image: alpine:latest
+    container_name: log-generator
+    command: >
+      sh -c "
+        apk add --no-cache bash &&
+        while true; do
+          timestamp=$$(date -u +'%Y-%m-%dT%H:%M:%S.%3NZ');
+          case $$(($$RANDOM % 8)) in
+            0) echo \"$$timestamp INFO [spark-app] Processing batch $$(($$RANDOM % 10000 + 1000)) records\" >> /var/log/otel/application.log ;;
+            1) echo \"$$timestamp DEBUG [spark-driver] Memory usage: $$(($$RANDOM % 100))%\" >> /var/log/otel/application.log ;;
+            2) echo \"$$timestamp WARN [spark-executor] Task execution time exceeded: $$(($$RANDOM % 5000 + 1000))ms\" >> /var/log/otel/application.log ;;
+            3) echo \"$$timestamp INFO [anomaly-detector] Found $$(($$RANDOM % 20)) anomalies\" >> /var/log/otel/application.log ;;
+            4) echo \"$$timestamp DEBUG [data-pipeline] Cache hits: $$(($$RANDOM % 1000))\" >> /var/log/otel/application.log ;;
+            5) echo \"$$timestamp ERROR [spark-sql] Query timeout after $$(($$RANDOM % 30 + 10)) seconds\" >> /var/log/otel/application.log ;;
+            6) if [ $$(($$RANDOM % 10)) -eq 0 ]; then 
+                 echo \"$$timestamp ERROR [system] This is a very long error message that should be truncated by the ETL processor when it exceeds the 10000 character limit. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium.\" >> /var/log/otel/application.log;
+               else 
+                 echo \"$$timestamp INFO [system] Health check passed\" >> /var/log/otel/application.log;
+               fi ;;
+            7) echo \"$$timestamp DEBUG [monitoring] Metrics collection completed\" >> /var/log/otel/application.log ;;
+          esac;
+          sleep $$(($$RANDOM % 15 + 10));
+        done
+      "
+    volumes:
+      - ./otel/logs:/var/log/otel
     networks:
       - aiops-network
 

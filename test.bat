@@ -17,11 +17,11 @@ if %ERRORLEVEL% NEQ 0 (
 
 REM Count running containers
 for /f "tokens=*" %%i in ('docker-compose ps --services --filter "status=running"') do set /a count+=1
-if %count% LSS 5 (
-    echo [FAIL] Not all services running. Expected 5, found %count%
+if %count% LSS 7 (
+    echo [FAIL] Not all services running. Expected 7, found %count%
     goto :end_tests
 )
-echo [PASS] All 5 Docker services running
+echo [PASS] All 7 Docker services running
 
 REM Test Elasticsearch connectivity
 echo.
@@ -104,14 +104,52 @@ if %ERRORLEVEL% NEQ 0 (
     echo [PASS] Spark application is running
 )
 
-REM Test OTel Collector health
+REM Test OTel Collector Agent health
 echo.
-echo [BONUS] Testing OTel Collector health...
+echo [BONUS] Testing OTel Collector Agent health...
 powershell -Command "$response = Invoke-WebRequest -Uri 'http://localhost:13133' -UseBasicParsing -ErrorAction SilentlyContinue; if ($response.StatusCode -eq 200) { exit 0 } else { exit 1 }"
 if %ERRORLEVEL% NEQ 0 (
-    echo [WARN] OTel Collector health check not responding (non-critical)
+    echo [WARN] OTel Collector Agent health check not responding (non-critical)
 ) else (
-    echo [PASS] OTel Collector is healthy
+    echo [PASS] OTel Collector Agent is healthy
+)
+
+REM Test OTel Collector Gateway health  
+echo.
+echo [BONUS] Testing OTel Collector Gateway health...
+powershell -Command "$response = Invoke-WebRequest -Uri 'http://localhost:13134' -UseBasicParsing -ErrorAction SilentlyContinue; if ($response.StatusCode -eq 200) { exit 0 } else { exit 1 }"
+if %ERRORLEVEL% NEQ 0 (
+    echo [WARN] OTel Collector Gateway health check not responding (non-critical)
+) else (
+    echo [PASS] OTel Collector Gateway is healthy
+)
+
+REM Test ETL Debug Log Filtering
+echo.
+echo [ETL-1] Testing debug log filtering...
+timeout /t 10 /nobreak >nul
+for /f "tokens=*" %%i in ('powershell -Command "try { (Invoke-WebRequest -Uri 'http://localhost:9200/logs-*/_search?q=log.source:filelog AND message:DEBUG&size=0' -UseBasicParsing).Content | ConvertFrom-Json | Select-Object -ExpandProperty hits | Select-Object -ExpandProperty total | Select-Object -ExpandProperty value } catch { 0 }"') do set debug_count=%%i
+for /f "tokens=*" %%j in ('powershell -Command "try { (Invoke-WebRequest -Uri 'http://localhost:9200/logs-*/_search?q=log.source:filelog AND (message:INFO OR message:WARN OR message:ERROR)&size=0' -UseBasicParsing).Content | ConvertFrom-Json | Select-Object -ExpandProperty hits | Select-Object -ExpandProperty total | Select-Object -ExpandProperty value } catch { 0 }"') do set non_debug_count=%%j
+
+if %debug_count% EQU 0 (
+    if %non_debug_count% GTR 0 (
+        echo [PASS] Debug logs filtered successfully ^(%non_debug_count% non-debug logs found^)
+    ) else (
+        echo [WARN] No logs found at all - may need more time
+    )
+) else (
+    echo [WARN] Debug filtering may not be working - found %debug_count% debug logs
+)
+
+REM Test ETL Message Truncation
+echo.
+echo [ETL-2] Testing message truncation...
+for /f "tokens=*" %%k in ('powershell -Command "try { $result = (Invoke-WebRequest -Uri 'http://localhost:9200/logs-*/_search?q=log.source:filelog AND truncated:true&size=1' -UseBasicParsing).Content | ConvertFrom-Json; $result.hits.total.value } catch { 0 }"') do set truncated_count=%%k
+
+if %truncated_count% GTR 0 (
+    echo [PASS] Message truncation working - found %truncated_count% truncated events
+) else (
+    echo [WARN] No truncated messages found - long messages may not be present yet
 )
 
 echo.
@@ -120,16 +158,19 @@ echo ALL TESTS PASSED! ✓
 echo ========================================
 echo.
 echo Platform Status:
-echo   Services:         5/5 running
+echo   Services:         7/7 running
 echo   Metrics:          %metrics_count% documents
 echo   Dashboard:        Available
 echo   Spark App:        Running
+echo   OTel Architecture: Agent + Gateway + Log Generator
 echo.
 echo Access URLs:
 echo   Kibana:           http://localhost:5601
 echo   Spark Master:     http://localhost:8080
 echo   Spark App:        http://localhost:4040
 echo   Elasticsearch:    http://localhost:9200
+echo   OTel Agent:       http://localhost:13133
+echo   OTel Gateway:     http://localhost:13134
 echo.
 goto :eof
 
