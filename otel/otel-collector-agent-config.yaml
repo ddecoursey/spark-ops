@@ -82,14 +82,45 @@ processors:
     send_batch_size: 512
 
 exporters:
-  # Export to Gateway Collector via OTLP
-  otlp/gateway:
-    endpoint: http://otel-collector-gateway:4317
+  # Load Balancing Exporter - Distributes data across multiple gateway instances
+  loadbalancing:
+    resolver:
+      static:
+        hostnames: ["otel-collector-gateway-1:4317", "otel-collector-gateway-2:4327"]
+    protocol:
+      otlp:
+        tls:
+          insecure: true
+        sending_queue:
+          num_consumers: 4
+          queue_size: 100
+        retry_on_failure:
+          enabled: true
+          initial_interval: 5s
+          max_interval: 30s
+          max_elapsed_time: 300s
+  
+  # Backup individual gateway exporters (for fallback/troubleshooting)
+  otlp/gateway-1:
+    endpoint: http://otel-collector-gateway-1:4317
     tls:
       insecure: true
     sending_queue:
-      num_consumers: 4
-      queue_size: 100
+      num_consumers: 2
+      queue_size: 50
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+  
+  otlp/gateway-2:
+    endpoint: http://otel-collector-gateway-2:4327
+    tls:
+      insecure: true
+    sending_queue:
+      num_consumers: 2
+      queue_size: 50
     retry_on_failure:
       enabled: true
       initial_interval: 5s
@@ -116,17 +147,17 @@ service:
     metrics:
       receivers: [otlp, apachespark]
       processors: [memory_limiter, resource, batch]
-      exporters: [otlp/gateway, debug]
+      exporters: [loadbalancing, debug]
     
     logs:
       receivers: [otlp, filelog]
       processors: [memory_limiter, resource, batch]
-      exporters: [otlp/gateway]
+      exporters: [loadbalancing]
     
     traces:
       receivers: [otlp]
       processors: [memory_limiter, resource, batch]
-      exporters: [otlp/gateway]
+      exporters: [loadbalancing]
   
   telemetry:
     logs:

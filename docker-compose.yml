@@ -104,18 +104,40 @@ services:
     networks:
       - aiops-network
 
-  # OpenTelemetry Collector - Gateway Mode (ETL & Batching)
-  otel-collector-gateway:
+  # OpenTelemetry Collector - Gateway-1 (ETL & Batching)
+  otel-collector-gateway-1:
     image: otel/opentelemetry-collector-contrib:0.115.1
-    container_name: otel-collector-gateway
-    command: ["--config=/etc/otel-collector-gateway-config.yaml"]
+    container_name: otel-collector-gateway-1
+    command: ["--config=/etc/otel-collector-gateway-1-config.yaml"]
     volumes:
-      - ./otel/otel-collector-gateway-config.yaml:/etc/otel-collector-gateway-config.yaml
+      - ./otel/otel-collector-gateway-1-config.yaml:/etc/otel-collector-gateway-1-config.yaml
     ports:
-      - "4319:4317"   # OTLP gRPC receiver (different external port)
-      - "4320:4318"   # OTLP HTTP receiver (different external port)
-      - "13134:13133" # health_check extension (different external port)
-      - "8889:8888"   # metrics endpoint (different external port)
+      - "4319:4317"   # OTLP gRPC receiver
+      - "4320:4318"   # OTLP HTTP receiver
+      - "13134:13133" # health_check extension
+      - "8889:8888"   # metrics endpoint
+      - "1777:1777"   # pprof
+      - "55679:55679" # zpages
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - aiops-network
+
+  # OpenTelemetry Collector - Gateway-2 (ETL & Batching)
+  otel-collector-gateway-2:
+    image: otel/opentelemetry-collector-contrib:0.115.1
+    container_name: otel-collector-gateway-2
+    command: ["--config=/etc/otel-collector-gateway-2-config.yaml"]
+    volumes:
+      - ./otel/otel-collector-gateway-2-config.yaml:/etc/otel-collector-gateway-2-config.yaml
+    ports:
+      - "4329:4327"   # OTLP gRPC receiver (different internal port)
+      - "4330:4328"   # OTLP HTTP receiver (different internal port)
+      - "13144:13143" # health_check extension (different internal port)
+      - "8899:8898"   # metrics endpoint (different internal port)
+      - "1787:1787"   # pprof (different port)
+      - "55689:55689" # zpages (different port)
     depends_on:
       elasticsearch:
         condition: service_healthy

@@ -1,14 +1,14 @@
-# OpenTelemetry Collector - Gateway Mode Configuration  
-# This collector handles ETL, advanced processing, batching, and final export
+# OpenTelemetry Collector - Gateway-2 Configuration  
+# Load-balanced gateway instance #2 for ETL processing and export
 
 receivers:
   # Receive data from agent collectors via OTLP
   otlp:
     protocols:
       grpc:
-        endpoint: 0.0.0.0:4317
+        endpoint: 0.0.0.0:4327
       http:
-        endpoint: 0.0.0.0:4318
+        endpoint: 0.0.0.0:4328
 
 processors:
   # Memory limiter with higher capacity for gateway
@@ -17,11 +17,23 @@ processors:
     limit_mib: 1024
     spike_limit_mib: 256
   
-  # Enhanced resource processor with environment tagging
+  # Enhanced resource processor with environment tagging and load balancing tracking
   resource:
     attributes:
       - key: collector.mode
         value: "gateway"
+        action: insert
+      - key: collector.instance
+        value: "gateway-2"
+        action: insert
+      - key: gateway.id
+        value: "gw-002"
+        action: insert
+      - key: gateway.instance
+        value: "gateway-2"
+        action: insert
+      - key: gateway.port
+        value: "4327"
         action: insert
       - key: deployment.environment
         value: "local"
@@ -31,6 +43,9 @@ processors:
         action: insert
       - key: processing.timestamp
         value: "TIMESTAMP"
+        action: insert
+      - key: load_balancer.enabled
+        value: "true"
         action: insert
   
   # Advanced batching for optimal throughput
@@ -51,7 +66,7 @@ processors:
             new_value: "true"
           - action: add_label
             new_label: processed_by_gateway
-            new_value: "true"
+            new_value: "gateway-2"
           - action: add_label
             new_label: gateway_processing_time
             new_value: "TIMESTAMP"
@@ -62,14 +77,26 @@ processors:
     timeout: 5s
     override: false
   
-  # Attributes processor for data enrichment
+  # Attributes processor for data enrichment and load balancing tracking
   attributes:
     actions:
       - key: gateway.version
         value: "v1.0.0"
         action: insert
+      - key: gateway.instance
+        value: "gateway-2"
+        action: insert
+      - key: gateway.processed_by
+        value: "gateway-2"
+        action: insert
+      - key: gateway.load_balancer_target
+        value: "true"
+        action: insert
       - key: data_pipeline.stage
         value: "gateway"
+        action: insert
+      - key: data_pipeline.gateway_id
+        value: "gw-002"
         action: insert
 
   # ETL: Filter processor to drop debug level logs
@@ -80,12 +107,17 @@ processors:
         # Drop logs where message contains DEBUG (case insensitive)
         - 'IsMatch(body, "(?i).*DEBUG.*")'
 
-  # ETL: Transform processor to truncate long messages/bodies
+  # ETL: Transform processor for truncation and load balancing tracking
   transform:
     error_mode: ignore
     log_statements:
       - context: log
         statements:
+          # Add load balancing tracking attributes
+          - set(attributes["gateway.processed_by"], "gateway-2")
+          - set(attributes["gateway.processing_time"], Now())
+          - set(attributes["gateway.instance_id"], "gw-002")
+          - set(attributes["load_balancer.target"], "gateway-2")
           # Check and truncate log body if longer than 500 characters (for testing)
           - set(attributes["original_body_length"], Len(body)) where Len(body) > 500
           - set(attributes["truncated"], true) where Len(body) > 500
@@ -125,25 +157,17 @@ exporters:
     verbosity: detailed
     sampling_initial: 10
     sampling_thereafter: 500
-  
-
 
 extensions:
   health_check:
-    endpoint: 0.0.0.0:13133
+    endpoint: 0.0.0.0:13143
     path: "/health"
   
   pprof:
-    endpoint: 0.0.0.0:1777
+    endpoint: 0.0.0.0:1787
   
   zpages:
-    endpoint: 0.0.0.0:55679
-  
-  # Basic auth extension (can be enabled for security)
-  # basicauth/server:
-  #   htpasswd:
-  #     inline: |
-  #       otelcol:$2y$10$...
+    endpoint: 0.0.0.0:55689
 
 service:
   extensions: [health_check, pprof, zpages]
@@ -169,4 +193,4 @@ service:
       level: info
     metrics:
       level: detailed
-      address: 0.0.0.0:8888
+      address: 0.0.0.0:8898

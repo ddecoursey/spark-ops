@@ -14,31 +14,47 @@ This project provides a streamlined observability stack for Spark applications:
 ## 🏗️ Architecture
 
 ```
-┌─────────────────────────┐
-│  Spark Master + Worker  │
-│  (anomaly_detection_app)│
-└───────────┬─────────────┘
-            │ HTTP :4040
-            │ Metrics API
-            ▼
-┌─────────────────────────┐
-│  OpenTelemetry Collector│
-│  (apachespark receiver) │
-└───────────┬─────────────┘
-            │ Data Streams
-            │ (ECS Format)
-            ▼
-┌─────────────────────────┐
-│     Elasticsearch       │
-│  metrics-apachespark-*  │
-└───────────┬─────────────┘
-            │ Queries
-            ▼
-┌─────────────────────────┐
-│        Kibana           │
-│  "Spark Cluster Mon..."│
-└─────────────────────────┘
+┌─────────────────────────┐    ┌─────────────────────────┐
+│  Spark Master + Worker  │    │      Log Generator      │
+│  (anomaly_detection_app)│    │   (Continuous Logs)     │
+└───────────┬─────────────┘    └───────────┬─────────────┘
+            │ HTTP :4040                   │ File Logs
+            │ Metrics API                  │
+            ▼                              ▼
+┌─────────────────────────────────────────────────────────┐
+│              OpenTelemetry Agent                        │
+│           (Load Balancing Distributor)                  │
+└───────────┬─────────────────────────────┬───────────────┘
+            │                             │
+            ▼                             ▼
+┌─────────────────────────┐    ┌─────────────────────────┐
+│  OTel Gateway-1         │    │  OTel Gateway-2         │
+│  (ETL Processing)       │    │  (ETL Processing)       │
+│  Port: 13134            │    │  Port: 13144            │
+└───────────┬─────────────┘    └───────────┬─────────────┘
+            │                             │
+            └──────────────┬──────────────┘
+                          │ Tagged Data Streams
+                          │ (ECS Format)
+                          ▼
+            ┌─────────────────────────┐
+            │     Elasticsearch       │
+            │ metrics-*, logs-*       │
+            └───────────┬─────────────┘
+                        │ Queries
+                        ▼
+            ┌─────────────────────────┐
+            │        Kibana           │
+            │ • Spark Cluster Mon...  │
+            │ • OpenTelemetry Mon...  │
+            └─────────────────────────┘
 ```
+
+**Key Features:**
+- **Load Balanced Gateways**: Dual OTel collectors distribute processing load
+- **Gateway Tracking**: Each document tagged with processing gateway ID
+- **Dual Dashboards**: Separate monitoring for Spark metrics and OTel processing
+- **Real-time Monitoring**: Live visualization of load distribution and throughput
 
 ## 📋 Prerequisites
 
@@ -108,10 +124,33 @@ test.bat
 ```
 
 The test suite checks:
-- ✅ All 5 Docker services running
+- ✅ All 8 Docker services running
 - ✅ Elasticsearch responding and contains metrics
-- ✅ Kibana responding with dashboard available
+- ✅ Kibana responding with 2 dashboards available
 - ✅ Spark Master UI accessible
+
+## 📊 Dashboards
+
+Access Kibana at **http://localhost:5601** to view the dashboards:
+
+### 1. Spark Cluster Monitoring
+- **Active Applications**: Current running Spark apps
+- **Total Stages**: Stages processed across all applications
+- **I/O Records**: Total records processed and shuffle operations
+- **Timeline Visualizations**: Performance trends over time
+- **Stage Analysis**: Bar charts and pie charts for stage distribution
+
+### 2. OpenTelemetry Collector Monitoring
+- **Gateway Load Distribution**: Pie chart showing document distribution across gateway instances
+- **Total Documents Processed**: Real-time count of ETL documents processed
+- **Processing Rate Over Time**: Timeline showing processing rates by gateway
+- **Load Balancing Health**: Visual indicators of balanced vs. unbalanced load distribution
+
+**Dashboard Features:**
+- 🔄 Auto-refresh every 30 seconds
+- ⏱️ Configurable time ranges (last 15m, 1h, 24h, etc.)
+- 🔍 Interactive filtering and drill-down capabilities
+- 📈 Real-time performance monitoring
 - ✅ Spark Application UI accessible
 - ✅ Spark application process running
 - ✅ OTel Collector healthy

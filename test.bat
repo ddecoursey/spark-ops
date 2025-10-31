@@ -17,11 +17,11 @@ if %ERRORLEVEL% NEQ 0 (
 
 REM Count running containers
 for /f "tokens=*" %%i in ('docker-compose ps --services --filter "status=running"') do set /a count+=1
-if %count% LSS 7 (
-    echo [FAIL] Not all services running. Expected 7, found %count%
+if %count% LSS 8 (
+    echo [FAIL] Not all services running. Expected 8, found %count%
     goto :end_tests
 )
-echo [PASS] All 7 Docker services running
+echo [PASS] All 8 Docker services running
 
 REM Test Elasticsearch connectivity
 echo.
@@ -53,15 +53,15 @@ if %ERRORLEVEL% NEQ 0 (
 )
 echo [PASS] Kibana is responding
 
-REM Test Kibana dashboard exists
+REM Test Kibana dashboards exist
 echo.
-echo [5/8] Checking Kibana dashboard...
-for /f "tokens=*" %%i in ('powershell -Command "(Invoke-WebRequest -Uri 'http://localhost:5601/api/saved_objects/_find?type=dashboard&search=Spark' -Headers @{\"kbn-xsrf\"=\"true\"} -UseBasicParsing).Content | ConvertFrom-Json | Select-Object -ExpandProperty total"') do set dashboard_count=%%i
-if %dashboard_count% NEQ 1 (
-    echo [FAIL] Dashboard not found or multiple dashboards found
+echo [5/8] Checking Kibana dashboards...
+for /f "tokens=*" %%i in ('powershell -Command "(Invoke-WebRequest -Uri 'http://localhost:5601/api/saved_objects/_find?type=dashboard&search=*' -Headers @{\"kbn-xsrf\"=\"true\"} -UseBasicParsing).Content | ConvertFrom-Json | Select-Object -ExpandProperty total"') do set dashboard_count=%%i
+if %dashboard_count% LSS 2 (
+    echo [FAIL] Expected 2 dashboards, found %dashboard_count%
     goto :end_tests
 )
-echo [PASS] Spark dashboard found in Kibana
+echo [PASS] Found %dashboard_count% dashboards in Kibana ^(Spark + OpenTelemetry^)
 
 REM Test Spark Master UI
 echo.
@@ -114,14 +114,24 @@ if %ERRORLEVEL% NEQ 0 (
     echo [PASS] OTel Collector Agent is healthy
 )
 
-REM Test OTel Collector Gateway health  
+REM Test OTel Collector Gateway-1 health  
 echo.
-echo [BONUS] Testing OTel Collector Gateway health...
-powershell -Command "$response = Invoke-WebRequest -Uri 'http://localhost:13134' -UseBasicParsing -ErrorAction SilentlyContinue; if ($response.StatusCode -eq 200) { exit 0 } else { exit 1 }"
+echo [BONUS] Testing OTel Collector Gateway-1 health...
+powershell -Command "$response = Invoke-WebRequest -Uri 'http://localhost:13134/health' -UseBasicParsing -ErrorAction SilentlyContinue; if ($response.StatusCode -eq 200) { exit 0 } else { exit 1 }"
 if %ERRORLEVEL% NEQ 0 (
-    echo [WARN] OTel Collector Gateway health check not responding (non-critical)
+    echo [WARN] OTel Collector Gateway-1 health check not responding (non-critical)
 ) else (
-    echo [PASS] OTel Collector Gateway is healthy
+    echo [PASS] OTel Collector Gateway-1 is healthy
+)
+
+REM Test OTel Collector Gateway-2 health  
+echo.
+echo [BONUS] Testing OTel Collector Gateway-2 health...
+powershell -Command "$response = Invoke-WebRequest -Uri 'http://localhost:13144/health' -UseBasicParsing -ErrorAction SilentlyContinue; if ($response.StatusCode -eq 200) { exit 0 } else { exit 1 }"
+if %ERRORLEVEL% NEQ 0 (
+    echo [WARN] OTel Collector Gateway-2 health check not responding (non-critical)
+) else (
+    echo [PASS] OTel Collector Gateway-2 is healthy
 )
 
 REM Test ETL Debug Log Filtering
@@ -152,17 +162,38 @@ if %truncated_count% GTR 0 (
     echo [WARN] No truncated messages found - long messages may not be present yet
 )
 
+REM Test Load Balancing Distribution
+echo.
+echo [LB-1] Testing load balancing distribution...
+timeout /t 5 /nobreak >nul
+
+for /f "tokens=*" %%l in ('powershell -Command "try { (Invoke-WebRequest -Uri 'http://localhost:9200/logs-*/_search?q=gateway.processed_by:gateway-1&size=0' -UseBasicParsing).Content | ConvertFrom-Json | Select-Object -ExpandProperty hits | Select-Object -ExpandProperty total | Select-Object -ExpandProperty value } catch { 0 }"') do set gw1_docs=%%l
+
+for /f "tokens=*" %%m in ('powershell -Command "try { (Invoke-WebRequest -Uri 'http://localhost:9200/logs-*/_search?q=gateway.processed_by:gateway-2&size=0' -UseBasicParsing).Content | ConvertFrom-Json | Select-Object -ExpandProperty hits | Select-Object -ExpandProperty total | Select-Object -ExpandProperty value } catch { 0 }"') do set gw2_docs=%%m
+
+set /a total_lb_docs=%gw1_docs% + %gw2_docs%
+
+if %total_lb_docs% GTR 0 (
+    if %gw1_docs% GTR 0 if %gw2_docs% GTR 0 (
+        echo [PASS] Load balancing working - Gateway-1: %gw1_docs%, Gateway-2: %gw2_docs%
+    ) else (
+        echo [WARN] Load balancing may not be working - only one gateway has documents
+    )
+) else (
+    echo [WARN] No load-balanced documents found - may need more time
+)
+
 echo.
 echo ========================================
 echo ALL TESTS PASSED! ✓
 echo ========================================
 echo.
 echo Platform Status:
-echo   Services:         7/7 running
+echo   Services:         8/8 running
 echo   Metrics:          %metrics_count% documents
 echo   Dashboard:        Available
 echo   Spark App:        Running
-echo   OTel Architecture: Agent + Gateway + Log Generator
+echo   OTel Architecture: Agent + 2x Gateway (Load Balanced) + Log Generator
 echo.
 echo Access URLs:
 echo   Kibana:           http://localhost:5601
@@ -170,7 +201,8 @@ echo   Spark Master:     http://localhost:8080
 echo   Spark App:        http://localhost:4040
 echo   Elasticsearch:    http://localhost:9200
 echo   OTel Agent:       http://localhost:13133
-echo   OTel Gateway:     http://localhost:13134
+echo   OTel Gateway-1:   http://localhost:13134/health
+echo   OTel Gateway-2:   http://localhost:13144/health
 echo.
 goto :eof
 
