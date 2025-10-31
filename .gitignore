@@ -1,0 +1,48 @@
+# .gitignore for Spark AIOps Project
+
+# Docker volumes and data
+prometheus-data/
+grafana-data/
+postgres-data/
+spark/data/*
+!spark/data/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+
+# Spark
+spark-warehouse/
+metastore_db/
+derby.log
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Environment variables
+.env
+.env.local
+
+# Temporary files
+*.tmp
+tmp/
+temp/

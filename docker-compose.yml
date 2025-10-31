@@ -1,0 +1,111 @@
+services:
+  # Apache Spark Master
+  spark-master:
+    image: apache/spark:3.5.0
+    container_name: spark-master
+    hostname: spark-master
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+    environment:
+      - SPARK_NO_DAEMONIZE=true
+      - SPARK_MASTER_HOST=spark-master
+      - SPARK_MASTER_PORT=7077
+      - SPARK_MASTER_WEBUI_PORT=8080
+    ports:
+      - "8080:8080"  # Spark Master UI
+      - "7077:7077"  # Spark Master Port
+      - "4040:4040"  # Spark Application UI
+    volumes:
+      - ./spark/apps:/opt/spark-apps
+      - ./spark/data:/opt/spark-data
+    networks:
+      - aiops-network
+
+  # Apache Spark Worker
+  spark-worker:
+    image: apache/spark:3.5.0
+    container_name: spark-worker
+    hostname: spark-worker
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    environment:
+      - SPARK_NO_DAEMONIZE=true
+      - SPARK_WORKER_CORES=2
+      - SPARK_WORKER_MEMORY=2G
+      - SPARK_WORKER_PORT=8881
+      - SPARK_WORKER_WEBUI_PORT=8081
+      - SPARK_MASTER=spark://spark-master:7077
+    ports:
+      - "8081:8081"  # Spark Worker UI
+    depends_on:
+      - spark-master
+    volumes:
+      - ./spark/apps:/opt/spark-apps
+      - ./spark/data:/opt/spark-data
+    networks:
+      - aiops-network
+
+  # Elasticsearch for metrics and logs storage
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.0.0-beta1
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+      - xpack.security.http.ssl.enabled=false
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    networks:
+      - aiops-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Kibana for visualization
+  kibana:
+    image: docker.elastic.co/kibana/kibana:9.0.0-beta1
+    container_name: kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - XPACK_SECURITY_ENABLED=false
+    ports:
+      - "5601:5601"
+    volumes:
+      - ./kibana/dashboards:/usr/share/kibana/dashboards
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - aiops-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5601/api/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # OpenTelemetry Collector
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.115.1
+    container_name: otel-collector
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel/otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    ports:
+      - "4317:4317"   # OTLP gRPC receiver
+      - "4318:4318"   # OTLP HTTP receiver
+      - "13133:13133" # health_check extension
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - aiops-network
+
+networks:
+  aiops-network:
+    driver: bridge
+
+volumes:
+  elasticsearch-data:
